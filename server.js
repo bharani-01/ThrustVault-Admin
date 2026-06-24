@@ -374,24 +374,12 @@ app.post('/api/admin/rpc/create_vault_user', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // 1. Insert into auth.users (Supabase system structure)
+    // 1. Insert into auth.users (lightweight reference — Cognito handles auth)
     await client.query(`
-      INSERT INTO auth.users (
-        instance_id, id, aud, role, email, encrypted_password, 
-        email_confirmed_at, recovery_sent_at, last_sign_in_at, 
-        raw_app_meta_data, raw_user_meta_data, created_at, updated_at, 
-        confirmation_token, email_change, email_change_token_new, recovery_token
-      )
-      VALUES (
-        '00000000-0000-0000-0000-000000000000',
-        $1, 'authenticated', 'authenticated', $2, crypt($3, gen_salt('bf')),
-        now(), now(), now(),
-        '{"provider":"email","providers":["email"]}'::jsonb,
-        json_build_object('role', $4::text)::jsonb,
-        now(), now(), '', '', '', ''
-      )
+      INSERT INTO auth.users (id, email)
+      VALUES ($1, $2)
       ON CONFLICT (id) DO NOTHING
-    `, [newUid, email_val, password_val, role_val]);
+    `, [newUid, email_val]);
 
     // 2. Insert into public.user_profiles
     await client.query(`
@@ -852,22 +840,10 @@ app.get('/api/admin/users', async (req, res) => {
 
       for (const missing of missingInDb) {
         console.log(`[Auto-Sync] Auto-creating missing database profile for Cognito user: ${missing.email}`);
-        // Ensure auth.users entry exists
+        // Ensure auth.users entry exists (lightweight — Cognito handles auth)
         await client.query(`
-          INSERT INTO auth.users (
-            instance_id, id, aud, role, email, encrypted_password, 
-            email_confirmed_at, recovery_sent_at, last_sign_in_at, 
-            raw_app_meta_data, raw_user_meta_data, created_at, updated_at, 
-            confirmation_token, email_change, email_change_token_new, recovery_token
-          )
-          VALUES (
-            '00000000-0000-0000-0000-000000000000',
-            $1, 'authenticated', 'authenticated', $2, crypt('ThrustVaultSyncPass123!', gen_salt('bf')),
-            now(), now(), now(),
-            '{"provider":"email","providers":["email"]}'::jsonb,
-            json_build_object('role', 'user')::jsonb,
-            now(), now(), '', '', '', ''
-          )
+          INSERT INTO auth.users (id, email)
+          VALUES ($1, $2)
           ON CONFLICT (id) DO NOTHING
         `, [missing.id, missing.email]);
 
