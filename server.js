@@ -12,9 +12,8 @@ const os = require('os');
 const pool = require('./src/config/db');
 const { queryTable } = require('./src/utils/queryBuilder');
 
-// Reuse Cognito config helpers
-const { cognito, cognitoSecretHash } = require('./src/config/cognito');
 const { normaliseRole } = require('./src/utils/roleHelper');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = parseInt(process.env.ADMIN_PORT || '8001', 10);
@@ -29,6 +28,7 @@ app.use(session({
     pool,
     tableName: 'user_sessions',
     createTableIfMissing: true,
+    errorLog: (err) => console.error('[pgSession Error]', err.message),
   }),
   secret: process.env.SESSION_SECRET || 'thrustvault-change-me-in-production',
   resave: false,
@@ -82,14 +82,23 @@ app.use((req, res, next) => {
 
   const isPublicFile = publicPaths.includes(req.path) ||
     req.path.startsWith('/libs/') ||
-    req.path.startsWith('/api/auth/');
+    req.path.startsWith('/assets/') ||
+    req.path.startsWith('/images/') ||
+    req.path.startsWith('/api/auth/') ||
+    req.path.startsWith('/api/guest/') ||
+    req.path.startsWith('/api/public/') ||
+    req.path.startsWith('/motor/') ||
+    req.path.startsWith('/esc/') ||
+    req.path.startsWith('/propeller/') ||
+    req.path.startsWith('/share/') ||
+    /\.(css|js|png|jpg|jpeg|gif|svg|ico|webp)$/i.test(req.path);
 
   if (isPublicFile) {
     return next();
   }
 
-  const role = req.session.role;
-  const ts = req.session.timestamp || 0;
+  const role = req.session ? req.session.role : null;
+  const ts = req.session ? req.session.timestamp || 0 : 0;
 
   if (!role || role !== 'admin' || (Date.now() - ts > 86400000)) {
     if (req.path.startsWith('/api/')) {
@@ -101,25 +110,37 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static assets from public/ folder
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/admin', express.static(path.join(__dirname, 'public')));
+// Serve static assets from public/ folder or React dist
+const ADMIN_FRONTEND_DIST = path.join(__dirname, 'frontend', 'dist');
 
-// HTML Page Routes Redirections
-app.get('/', (req, res) => res.redirect('/admin/dashboard'));
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+if (require('fs').existsSync(ADMIN_FRONTEND_DIST)) {
+  app.use(express.static(ADMIN_FRONTEND_DIST));
+  app.use('/admin', express.static(ADMIN_FRONTEND_DIST));
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(ADMIN_FRONTEND_DIST, 'index.html'));
+  });
+} else {
+  app.use(express.static(path.join(__dirname, 'public')));
+  app.use('/admin', express.static(path.join(__dirname, 'public')));
 
-app.get('/admin/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_dashboard.html')));
-app.get('/admin/users', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_users.html')));
-app.get('/admin/access-requests', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_access_requests.html')));
-app.get('/admin/schema-customizer', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_schema_customizer.html')));
-app.get('/admin/audit-logs', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_audit_logs.html')));
-app.get('/admin/exports', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_exports.html')));
-app.get('/admin/imports', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_imports.html')));
-app.get('/admin/analytics', (req, res) => res.sendFile(path.join(__dirname, 'public', 'performance_analytics.html')));
-app.get('/admin/explorer', (req, res) => res.sendFile(path.join(__dirname, 'public', 'motor_explorer.html')));
-app.get(['/admin/escs', '/admin/escs/:model', '/admin/esc/:model'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'esc_explorer.html')));
-app.get(['/admin/propellers', '/admin/propellers/:model', '/admin/propeller/:model'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'propeller_explorer.html')));
+  // HTML Page Routes Redirections
+  app.get('/', (req, res) => res.redirect('/admin/dashboard'));
+  app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+
+  app.get('/admin/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_dashboard.html')));
+  app.get('/admin/users', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_users.html')));
+  app.get('/admin/access-requests', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_access_requests.html')));
+  app.get('/admin/schema-customizer', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_schema_customizer.html')));
+  app.get('/admin/audit-logs', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_audit_logs.html')));
+  app.get('/admin/exports', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_exports.html')));
+  app.get('/admin/imports', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin_imports.html')));
+  app.get('/admin/analytics', (req, res) => res.sendFile(path.join(__dirname, 'public', 'performance_analytics.html')));
+  app.get('/admin/explorer', (req, res) => res.sendFile(path.join(__dirname, 'public', 'motor_explorer.html')));
+  app.get(['/admin/escs', '/admin/escs/:model', '/admin/esc/:model'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'esc_explorer.html')));
+  app.get(['/admin/propellers', '/admin/propellers/:model', '/admin/propeller/:model'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'propeller_explorer.html')));
+}
 
 // ── Authentication APIs ──────────────────────────────────────────────────────────
 
@@ -128,82 +149,29 @@ app.post('/api/auth/login', async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: 'Missing email or password' });
 
   try {
-    const CLIENT_ID = process.env.COGNITO_CLIENT_ID;
-    let accessToken = null;
-    let uid = null;
-    let role = null;
-
-    if (CLIENT_ID) {
-      const authParams = { USERNAME: email, PASSWORD: password };
-      const sh = cognitoSecretHash(email);
-      if (sh) authParams.SECRET_HASH = sh;
-
-      try {
-        const { InitiateAuthCommand, GetUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
-        const authRes = await cognito.send(new InitiateAuthCommand({
-          ClientId: CLIENT_ID,
-          AuthFlow: 'USER_PASSWORD_AUTH',
-          AuthParameters: authParams,
-        }));
-        accessToken = authRes.AuthenticationResult.AccessToken;
-
-        const userRes = await cognito.send(new GetUserCommand({ AccessToken: accessToken }));
-        uid = userRes.UserAttributes.find(a => a.Name === 'sub')?.Value;
-      } catch (cognitoErr) {
-        console.warn('Cognito auth failed, trying database fallback...', cognitoErr.message);
-        throw cognitoErr;
-      }
-    } else {
-      throw new Error('Cognito not configured');
-    }
-
-    if (!uid) throw new Error('Cognito sub not found');
-
-    const profileRes = await pool.query('SELECT id, role FROM user_profiles WHERE email = $1', [email]);
+    const profileRes = await pool.query('SELECT id, role, password_hash FROM public.user_profiles WHERE email = $1', [email]);
     const profile = profileRes.rows[0];
-    if (!profile) return res.status(403).json({ error: 'Profile not found in database' });
+    if (!profile) return res.status(400).json({ error: 'Invalid email or password' });
+    if (!profile.password_hash) return res.status(400).json({ error: 'Account has no password set. Contact an admin.' });
 
-    role = normaliseRole(profile.role);
+    const valid = await bcrypt.compare(password, profile.password_hash);
+    if (!valid) return res.status(400).json({ error: 'Invalid email or password' });
+
+    const role = normaliseRole(profile.role);
     if (role !== 'admin') {
       return res.status(403).json({ error: 'Access denied: Admin role required for the admin portal.' });
     }
 
-    // Sync profile ID if needed
-    if (profile.id !== uid) {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        // 1. Ensure foreign key references satisfy auth.users(id) constraint
-        await client.query(
-          `INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
-          [uid, email]
-        );
-        // 2. Perform the user profile mapping sync
-        await client.query(
-          `UPDATE public.user_profiles SET id = $1 WHERE email = $2`,
-          [uid, email]
-        );
-        await client.query('COMMIT');
-      } catch (syncErr) {
-        await client.query('ROLLBACK');
-        console.error('[Sync Profile Error]', syncErr.message);
-      } finally {
-        client.release();
-      }
-    }
-
     req.session.email = email;
     req.session.role = role;
-    req.session.uid = uid;
-    req.session.access_token = accessToken;
+    req.session.uid = profile.id;
     req.session.timestamp = Date.now();
 
-    return res.json({ email, role: 'admin', uid, timestamp: req.session.timestamp });
+    return res.json({ email, role: 'admin', uid: profile.id, timestamp: req.session.timestamp });
 
   } catch (err) {
-    const msg = err.message || '';
-    console.error('[Login Error]', msg);
-    return res.status(400).json({ error: msg });
+    console.error('[Login Error]', err.message);
+    return res.status(500).json({ error: 'Login failed. Please try again.' });
   }
 });
 
@@ -220,18 +188,243 @@ app.get('/api/auth/session', (req, res) => {
   res.json({ logged_in: true, email: req.session.email, role: 'admin', uid: req.session.uid });
 });
 
+// Create User account (admin check is handled by root security middleware)
+app.post('/api/user-profiles', async (req, res) => {
+  const { email, role, password } = req.body || {};
+  if (!email || !role || !password) {
+    return res.status(400).json({ error: 'Email, role, and password are required.' });
+  }
+  const client = await pool.connect();
+  try {
+    const password_hash = await bcrypt.hash(password, 10);
+    const newUid = crypto.randomUUID();
+    
+    await client.query('BEGIN');
+    await client.query('INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING', [newUid, email.trim().toLowerCase()]);
+    const result = await client.query(
+      'INSERT INTO public.user_profiles (id, email, role, password_hash) VALUES ($1, $2, $3, $4) ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, password_hash = EXCLUDED.password_hash RETURNING id, email, role, created_at',
+      [newUid, email.trim().toLowerCase(), role, password_hash]
+    );
+    await client.query('COMMIT');
+    res.status(201).json(result.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('[Create User Error]', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Update User (role or password)
+app.patch('/api/user-profiles/:id', async (req, res) => {
+  const { id } = req.params;
+  const { role, password } = req.body || {};
+  
+  try {
+    const updates = [];
+    const vals = [];
+    let idx = 1;
+    
+    if (role) {
+      updates.push(`role = $${idx++}`);
+      vals.push(role);
+    }
+    
+    if (password) {
+      const password_hash = await bcrypt.hash(password, 10);
+      updates.push(`password_hash = $${idx++}`);
+      vals.push(password_hash);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No update parameters provided.' });
+    }
+    
+    vals.push(id);
+    const sql = `UPDATE public.user_profiles SET ${updates.join(', ')} WHERE id = $${idx} RETURNING id, email, role, created_at`;
+    const result = await pool.query(sql, vals);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (e) {
+    console.error('[Update User Error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete User account
+app.delete('/api/user-profiles/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query('DELETE FROM public.user_profiles WHERE id = $1 RETURNING id, email', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    res.json({ success: true, message: `Account for ${result.rows[0].email} deleted successfully.` });
+  } catch (e) {
+    console.error('[Delete User Error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Process access requests action (approve/reject, create user profile and trigger email)
+app.post('/api/admin/access-requests/:id/action', async (req, res) => {
+  const { id } = req.params;
+  const { action } = req.body || {};
+  
+  if (action !== 'approved' && action !== 'rejected') {
+    return res.status(400).json({ error: "Invalid action. Must be 'approved' or 'rejected'." });
+  }
+  
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      const reqRes = await client.query('SELECT full_name, email, justification, status FROM public.access_requests WHERE id = $1', [id]);
+      const accessReq = reqRes.rows[0];
+      if (!accessReq) {
+        throw new Error('Access request not found');
+      }
+      
+      if (accessReq.status !== 'pending') {
+        throw new Error('Request has already been processed');
+      }
+      
+      await client.query('UPDATE public.access_requests SET status = $1 WHERE id = $2', [action, id]);
+      
+      let tempPassword = null;
+      if (action === 'approved') {
+        tempPassword = crypto.randomBytes(6).toString('hex') + 'V@' + Math.floor(Math.random() * 100);
+        const password_hash = await bcrypt.hash(tempPassword, 10);
+        const newUid = crypto.randomUUID();
+        
+        await client.query('INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING', [newUid, accessReq.email]);
+        await client.query(
+          `INSERT INTO public.user_profiles (id, email, role, password_hash)
+           VALUES ($1, $2, 'user', $3)
+           ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+          [newUid, accessReq.email, password_hash]
+        );
+      }
+      
+      await client.query('COMMIT');
+      
+      sendResendEmailHelper({
+        type: action,
+        to: accessReq.email,
+        full_name: accessReq.full_name,
+        temp_password: tempPassword,
+        requested_role: 'user'
+      }).catch(err => console.error('[Action Email Error]', err));
+      
+      res.json({ success: true, status: action });
+      
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error('[Access Request Action Error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Change Password for currently logged in admin user
+app.post('/api/auth/change-password', async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!req.session.uid) {
+    return res.status(401).json({ error: 'Unauthorized: Session not active.' });
+  }
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current password and new password are required.' });
+  }
+  try {
+    const userRes = await pool.query('SELECT password_hash FROM public.user_profiles WHERE id = $1', [req.session.uid]);
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const valid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!valid) return res.status(400).json({ error: 'Incorrect current password.' });
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE public.user_profiles SET password_hash = $1 WHERE id = $2', [newHash, req.session.uid]);
+    res.json({ success: true, message: 'Password updated successfully.' });
+  } catch (e) {
+    console.error('[Change Password Error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// Send OTP email via Resend API
+async function sendOtpEmail(email, otp) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY not configured');
+
+  const https = require('https');
+  const body = JSON.stringify({
+    from:    'ThrustVault <noreply@thrustvault.bharani-01.xyz>',
+    to:      [email],
+    subject: 'ThrustVault — Password Reset Code',
+    html:    `
+      <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8f9fa;border-radius:12px;">
+        <h2 style="color:#001e40;margin-bottom:8px;">Password Reset</h2>
+        <p style="color:#475569;font-size:14px;">Use the code below to reset your ThrustVault password. It expires in <strong>10 minutes</strong>.</p>
+        <div style="background:#001e40;color:#fff;font-size:32px;font-weight:800;letter-spacing:12px;text-align:center;padding:24px;border-radius:8px;margin:24px 0;">${otp}</div>
+        <p style="color:#94a3b8;font-size:12px;">If you didn't request this, ignore this email.</p>
+      </div>
+    `,
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.resend.com',
+      path:     '/emails',
+      method:   'POST',
+      headers:  { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (resp) => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => {
+        const parsed = JSON.parse(data);
+        if (resp.statusCode >= 400) reject(new Error(parsed.message || 'Resend API error'));
+        else resolve(parsed);
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email is required' });
+
   try {
-    const { ForgotPasswordCommand } = require('@aws-sdk/client-cognito-identity-provider');
-    const args = { ClientId: process.env.COGNITO_CLIENT_ID, Username: email };
-    const sh = cognitoSecretHash(email);
-    if (sh) args.SecretHash = sh;
-    await cognito.send(new ForgotPasswordCommand(args));
+    const profileRes = await pool.query('SELECT id FROM public.user_profiles WHERE email = $1', [email]);
+    if (!profileRes.rows.length) return res.json({ success: true }); // Silent success
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+    await pool.query(
+      `INSERT INTO public.password_reset_tokens (email, token, expires_at) VALUES ($1, $2, $3)`,
+      [email, otp, expiresAt]
+    );
+
+    await sendOtpEmail(email, otp);
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[ForgotPassword Error]', e.message);
+    res.status(500).json({ error: 'Failed to send reset code. Try again.' });
   }
 });
 
@@ -253,19 +446,27 @@ app.post('/api/auth/reset-password', async (req, res) => {
   if (!password || password.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
+
   try {
-    const { ConfirmForgotPasswordCommand } = require('@aws-sdk/client-cognito-identity-provider');
-    const args = {
-      ClientId: process.env.COGNITO_CLIENT_ID, Username: reset_email,
-      ConfirmationCode: reset_code, Password: password,
-    };
-    const sh = cognitoSecretHash(reset_email);
-    if (sh) args.SecretHash = sh;
-    await cognito.send(new ConfirmForgotPasswordCommand(args));
+    const tokenRes = await pool.query(
+      `SELECT id FROM public.password_reset_tokens
+       WHERE email = $1 AND token = $2 AND used = FALSE AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [reset_email, reset_code]
+    );
+    if (!tokenRes.rows.length) {
+      return res.status(400).json({ error: 'Invalid or expired reset code.' });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+    await pool.query('UPDATE public.user_profiles SET password_hash = $1 WHERE email = $2', [hash, reset_email]);
+    await pool.query('UPDATE public.password_reset_tokens SET used = TRUE WHERE id = $1', [tokenRes.rows[0].id]);
+
     req.session.destroy(() => { });
     res.json({ success: true });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    console.error('[ResetPassword Error]', e.message);
+    res.status(500).json({ error: 'Failed to reset password. Try again.' });
   }
 });
 
@@ -305,90 +506,20 @@ app.post('/api/admin/rpc/create_vault_user', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
-  if (!USER_POOL_ID) {
-    return res.status(500).json({ error: 'AWS Cognito User Pool is not configured in environment variables.' });
-  }
-
-  let newUid = null;
-  let targetUsername = null;
-  try {
-    const {
-      AdminCreateUserCommand,
-      AdminSetUserPasswordCommand,
-      ListUsersCommand
-    } = require('@aws-sdk/client-cognito-identity-provider');
-
-    // 1. Create User in Cognito
-    const cogUsername = crypto.randomUUID();
-    try {
-      const createUserRes = await cognito.send(new AdminCreateUserCommand({
-        UserPoolId: USER_POOL_ID,
-        Username: cogUsername,
-        UserAttributes: [
-          { Name: 'email', Value: email_val },
-          { Name: 'email_verified', Value: 'true' }
-        ],
-        MessageAction: 'SUPPRESS'
-      }));
-      const subAttr = createUserRes.User.Attributes.find(a => a.Name === 'sub');
-      newUid = subAttr ? subAttr.Value : null;
-      targetUsername = createUserRes.User.Username;
-    } catch (cognitoErr) {
-      if (cognitoErr.name === 'UsernameExistsException' || cognitoErr.name === 'AliasExistsException' || cognitoErr.message.includes('exists')) {
-        // User already exists, search by email to retrieve the existing sub/username
-        const listUsersRes = await cognito.send(new ListUsersCommand({
-          UserPoolId: USER_POOL_ID,
-          Filter: `email = "${email_val}"`
-        }));
-        if (listUsersRes.Users && listUsersRes.Users.length > 0) {
-          targetUsername = listUsersRes.Users[0].Username;
-          const subAttr = listUsersRes.Users[0].Attributes.find(a => a.Name === 'sub');
-          newUid = subAttr ? subAttr.Value : null;
-        } else {
-          throw cognitoErr;
-        }
-      } else {
-        throw cognitoErr;
-      }
-    }
-
-    if (!newUid || !targetUsername) {
-      throw new Error('Failed to retrieve user identifiers from AWS Cognito.');
-    }
-
-    // 2. Set permanent password in Cognito (using Cognito Username)
-    await cognito.send(new AdminSetUserPasswordCommand({
-      UserPoolId: USER_POOL_ID,
-      Username: targetUsername,
-      Password: password_val,
-      Permanent: true
-    }));
-
-  } catch (cognitoErr) {
-    console.error('[create_vault_user Cognito Error]:', cognitoErr.message);
-    return res.status(500).json({ error: `Cognito Provisioning Failed: ${cognitoErr.message}` });
-  }
-
   const client = await pool.connect();
   try {
+    const newUid = crypto.randomUUID();
+    const passwordHash = await bcrypt.hash(password_val, 12);
+
     await client.query('BEGIN');
-
-    // 1. Insert into auth.users (lightweight reference — Cognito handles auth)
+    await client.query('INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING', [newUid, email_val]);
     await client.query(`
-      INSERT INTO auth.users (id, email)
-      VALUES ($1, $2)
-      ON CONFLICT (id) DO NOTHING
-    `, [newUid, email_val]);
-
-    // 2. Insert into public.user_profiles
-    await client.query(`
-      INSERT INTO public.user_profiles (id, email, role)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role
-    `, [newUid, email_val, role_val]);
-
+      INSERT INTO public.user_profiles (id, email, role, password_hash)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, password_hash = EXCLUDED.password_hash
+    `, [newUid, email_val, role_val, passwordHash]);
     await client.query('COMMIT');
+
     res.json(newUid);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -404,34 +535,6 @@ app.post('/api/admin/rpc/delete_vault_user', async (req, res) => {
   const { user_id } = req.body || {};
   if (!user_id) return res.status(400).json({ error: 'user_id is required' });
 
-  // 1. Delete user from AWS Cognito User Pool
-  const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
-  if (USER_POOL_ID) {
-    try {
-      const { ListUsersCommand, AdminDeleteUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
-      
-      // Resolve the Cognito Username using the sub UUID
-      const listUsersRes = await cognito.send(new ListUsersCommand({
-        UserPoolId: USER_POOL_ID,
-        Filter: `sub = "${user_id}"`
-      }));
-
-      if (listUsersRes.Users && listUsersRes.Users.length > 0) {
-        const targetUsername = listUsersRes.Users[0].Username;
-        await cognito.send(new AdminDeleteUserCommand({
-          UserPoolId: USER_POOL_ID,
-          Username: targetUsername
-        }));
-      } else {
-        console.warn(`[delete_vault_user] User with sub ${user_id} not found in Cognito User Pool.`);
-      }
-    } catch (cognitoErr) {
-      console.error('[delete_vault_user Cognito Error]:', cognitoErr.message);
-      return res.status(500).json({ error: `Cognito Deletion Failed: ${cognitoErr.message}` });
-    }
-  }
-
-  // 2. Delete user from database
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -441,9 +544,6 @@ app.post('/api/admin/rpc/delete_vault_user', async (req, res) => {
 
     // 2. Delete public profile records
     await client.query('DELETE FROM public.user_profiles WHERE id = $1', [user_id]);
-
-    // 3. Delete from auth.users (cascades other auth entries)
-    await client.query('DELETE FROM auth.users WHERE id = $1', [user_id]);
 
     await client.query('COMMIT');
     res.json({ success: true });
@@ -506,14 +606,13 @@ app.post('/api/log-activity', async (req, res) => {
   }
 });
 
-// Email dispatch API route (uses Resend API via Node native fetch)
-app.post('/api/send-email', async (req, res) => {
-  const { type, to, full_name, temp_password, reset_link, requested_role } = req.body || {};
+// Helper function for Resend email dispatch
+async function sendResendEmailHelper({ type, to, full_name, temp_password, reset_link, requested_role }) {
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey || apiKey === 're_placeholder_key') {
     console.warn('EMAIL SYSTEM WARNING: RESEND_API_KEY is not configured. Email dispatch skipped.');
-    return res.json({ success: true, warning: 'Email dispatch skipped: API key unconfigured' });
+    return { success: true, warning: 'Email dispatch skipped: API key unconfigured' };
   }
 
   const appUrl = process.env.APP_BASE_URL || 'https://thrustvault.bharani-01.xyz';
@@ -594,31 +693,35 @@ app.post('/api/send-email', async (req, res) => {
       </div>
     `;
   } else {
-    return res.status(400).json({ error: 'Invalid email notification type' });
+    throw new Error('Invalid email notification type');
   }
 
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from: 'ThrustVault <onboarding@bharani-01.xyz>',
-        to: [to],
-        subject,
-        html
-      })
-    });
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'ThrustVault <onboarding@bharani-01.xyz>',
+      to: [to],
+      subject,
+      html
+    })
+  });
 
-    if (response.ok) {
-      res.json({ success: true });
-    } else {
-      const errBody = await response.text();
-      console.error(`Resend API returned error status ${response.status}: ${errBody}`);
-      res.status(500).json({ error: `Resend API returned status ${response.status}` });
-    }
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Resend API returned status ${response.status}: ${errBody}`);
+  }
+  return { success: true };
+}
+
+// Email dispatch API route
+app.post('/api/send-email', async (req, res) => {
+  try {
+    const result = await sendResendEmailHelper(req.body || {});
+    res.json(result);
   } catch (err) {
     console.error('Failed to send email via Resend:', err.message);
     res.status(500).json({ error: err.message });
@@ -781,121 +884,267 @@ app.get(['/api/admin/motor-test-data-points', '/api/admin/motor_test_data_points
   }
 });
 
-// Override users GET endpoint to list accounts directly from AWS Cognito User Pool with strictly no fallback
+// Override users GET endpoint to list accounts directly from public.user_profiles with strictly no fallback
 app.get('/api/admin/users', async (req, res) => {
-  const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
-  if (!USER_POOL_ID) {
-    return res.status(500).json({ error: 'AWS Cognito User Pool is not configured.' });
-  }
-
   try {
-    const { ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
-
-    let filter = undefined;
-    if (req.query.email && req.query.email.startsWith('eq.')) {
-      const emailVal = req.query.email.slice(3);
-      filter = `email = "${emailVal}"`;
-    }
-
-    const listRes = await cognito.send(new ListUsersCommand({
-      UserPoolId: USER_POOL_ID,
-      Filter: filter
+    const usersRes = await pool.query('SELECT id, email, role, created_at FROM public.user_profiles');
+    let users = usersRes.rows.map(r => ({
+      id: r.id,
+      email: r.email,
+      created_at: r.created_at,
+      role: r.role
     }));
-
-    const cognitoUsers = (listRes.Users || []).map(u => {
-      const email = u.Attributes.find(a => a.Name === 'email')?.Value;
-      const sub = u.Attributes.find(a => a.Name === 'sub')?.Value;
-      return {
-        id: sub,
-        email: email,
-        created_at: u.UserCreateDate,
-        role: 'user' // default role
-      };
-    }).filter(u => u.id && u.email);
-
-    // ── Bidirectional Sync and Auto-Healing ──
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      // 1. Get all user profiles from DB
-      const dbUsersRes = await client.query('SELECT id, email, role FROM public.user_profiles');
-      const dbUsers = dbUsersRes.rows;
-
-      const cognitoIds = new Set(cognitoUsers.map(u => u.id));
-
-      // 2. Identify and delete orphaned DB records (in DB but not in Cognito User Pool)
-      const orphanedDbUsers = dbUsers.filter(u => !cognitoIds.has(u.id));
-
-      for (const orphan of orphanedDbUsers) {
-        console.log(`[Auto-Sync] Cleaning up orphaned user in DB (not in Cognito): ${orphan.email}`);
-        await client.query('DELETE FROM public.user_onboarding WHERE user_id = $1', [orphan.id]);
-        await client.query('DELETE FROM public.user_profiles WHERE id = $1', [orphan.id]);
-        await client.query('DELETE FROM auth.users WHERE id = $1', [orphan.id]);
-      }
-
-      // 3. Identify and provision missing DB records (in Cognito but not in DB user_profiles)
-      const dbUserIds = new Set(dbUsers.map(u => u.id));
-      const missingInDb = cognitoUsers.filter(u => !dbUserIds.has(u.id));
-
-      for (const missing of missingInDb) {
-        console.log(`[Auto-Sync] Auto-creating missing database profile for Cognito user: ${missing.email}`);
-        // Ensure auth.users entry exists (lightweight — Cognito handles auth)
-        await client.query(`
-          INSERT INTO auth.users (id, email)
-          VALUES ($1, $2)
-          ON CONFLICT (id) DO NOTHING
-        `, [missing.id, missing.email]);
-
-        // Insert into public.user_profiles
-        await client.query(`
-          INSERT INTO public.user_profiles (id, email, role)
-          VALUES ($1, $2, 'user')
-          ON CONFLICT (id) DO NOTHING
-        `, [missing.id, missing.email]);
-      }
-
-      await client.query('COMMIT');
-    } catch (syncErr) {
-      await client.query('ROLLBACK');
-      console.error('[Auto-Sync] Mismatch resolution failed:', syncErr.message);
-    } finally {
-      client.release();
-    }
-
-    if (cognitoUsers.length > 0) {
-      const ids = cognitoUsers.map(u => u.id);
-      const dbRolesRes = await pool.query(
-        'SELECT id, role FROM public.user_profiles WHERE id = ANY($1)',
-        [ids]
-      );
-      const roleMap = {};
-      dbRolesRes.rows.forEach(r => {
-        roleMap[r.id] = r.role;
-      });
-
-      cognitoUsers.forEach(u => {
-        if (roleMap[u.id]) {
-          u.role = roleMap[u.id];
-        }
-      });
-    }
 
     // Sort by email.asc if requested
     if (req.query.order === 'email.asc') {
-      cognitoUsers.sort((a, b) => a.email.localeCompare(b.email));
+      users.sort((a, b) => a.email.localeCompare(b.email));
     }
 
-    return res.json(cognitoUsers);
+    return res.json(users);
 
   } catch (err) {
-    console.error('[GET /api/admin/users Cognito Error]:', err.message);
-    return res.status(500).json({ error: `Failed to fetch users from Cognito: ${err.message}` });
+    console.error('[GET /api/admin/users Error]:', err.message);
+    return res.status(500).json({ error: `Failed to fetch users: ${err.message}` });
+  }
+});
+
+// ── Catalog Init-Data API Endpoint ──────────────────────────────────────────────
+
+let cachedDashboardStats = null;
+
+async function getOrCalculateStats() {
+  if (cachedDashboardStats) return cachedDashboardStats;
+  try {
+    const res = await pool.query('SELECT max_thrust, recommended_esc, motor_name, custom_parameters FROM public.motors');
+    const allMotors = res.rows;
+    const totalMotors = allMotors.length;
+
+    function parseThrustToKg(thrustStr) {
+      if (!thrustStr) return 0;
+      const normalized = String(thrustStr).trim().toLowerCase().replace(/\s+/g, '');
+      const match = normalized.match(/^([0-9.]+)(kg|g)?$/);
+      if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2] || 'kg';
+        return unit === 'g' ? val / 1000 : val;
+      }
+      const numbers = normalized.match(/[0-9.]+/);
+      if (numbers) {
+        const val = parseFloat(numbers[0]);
+        return (normalized.includes('g') && !normalized.includes('kg')) ? val / 1000 : val;
+      }
+      return 0;
+    }
+
+    let minThrust = Infinity;
+    let maxThrust = -Infinity;
+    allMotors.forEach(m => {
+      const parsed = parseThrustToKg(m.max_thrust);
+      if (parsed > 0) {
+        if (parsed < minThrust) minThrust = parsed;
+        if (parsed > maxThrust) maxThrust = parsed;
+      }
+    });
+
+    let minThrustVal = 0;
+    let maxThrustVal = 0;
+    let thrustRangeStr = 'N/A';
+    let maxThrustStr = 'N/A';
+
+    if (minThrust !== Infinity && maxThrust !== -Infinity) {
+      minThrustVal = minThrust;
+      maxThrustVal = maxThrust;
+      thrustRangeStr = minThrust === maxThrust 
+        ? `${minThrust.toFixed(2)} kg` 
+        : `${minThrust.toFixed(2)} – ${maxThrust.toFixed(2)} kg`;
+      maxThrustStr = `${maxThrust.toFixed(2)} kg`;
+    }
+
+    let sRatings = [];
+    allMotors.forEach(m => {
+      const customParams = m.custom_parameters || {};
+      const v = (customParams.voltage || customParams.voltage_v || customParams.operating_voltage)
+        ? String(customParams.voltage || customParams.voltage_v || customParams.operating_voltage)
+        : '';
+      const esc = m.recommended_esc || '';
+      const name = m.motor_name || '';
+      
+      const match = v.match(/(\d+)s/i) || esc.match(/(\d+)s/i) || name.match(/(\d+)s/i);
+      if (match) {
+        const val = parseInt(match[1], 10);
+        if (val >= 1 && val <= 24) {
+          sRatings.push(val);
+        }
+      }
+    });
+
+    let voltageRangeStr = 'N/A';
+    if (sRatings.length > 0) {
+      const minS = Math.min(...sRatings);
+      const maxS = Math.max(...sRatings);
+      voltageRangeStr = minS === maxS ? `${minS}S` : `${minS}S – ${maxS}S`;
+    }
+
+    cachedDashboardStats = {
+      total_motors: totalMotors,
+      min_thrust: minThrustVal,
+      max_thrust: maxThrustVal,
+      thrust_range: thrustRangeStr,
+      max_thrust_str: maxThrustStr,
+      voltage_range: voltageRangeStr
+    };
+
+    return cachedDashboardStats;
+  } catch (err) {
+    console.error('Error calculating stats:', err);
+    return {
+      total_motors: 0,
+      min_thrust: 0,
+      max_thrust: 0,
+      thrust_range: 'N/A',
+      max_thrust_str: 'N/A',
+      voltage_range: 'N/A'
+    };
+  }
+}
+
+app.get('/api/init-data', async (req, res) => {
+  const LIMIT = 15;
+  try {
+    const [cats, counts, schema, motors, kpis, brandsQuery] = await Promise.all([
+      pool.query('SELECT id, name, description FROM public.categories ORDER BY name'),
+      pool.query('SELECT category_id, COUNT(*)::int AS cnt FROM public.motors GROUP BY category_id'),
+      pool.query('SELECT * FROM public.custom_specs_schema ORDER BY created_at'),
+      pool.query(`SELECT id, category_id, motor_name, company, max_thrust,
+                         recommended_esc, recommended_propeller,
+                         link_motor, link_esc, link_propeller, custom_parameters, uploaded_by,
+                         main_image, gallery_images
+                  FROM public.motors ORDER BY max_thrust ASC LIMIT $1`, [LIMIT]),
+      getOrCalculateStats(),
+      pool.query("SELECT DISTINCT company FROM public.motors WHERE company IS NOT NULL AND company != '' ORDER BY company")
+    ]);
+
+    const categoryCounts = {};
+    counts.rows.forEach(r => {
+      if (r.category_id) categoryCounts[String(r.category_id)] = r.cnt;
+    });
+
+    res.json({
+      categories: cats.rows,
+      category_counts: categoryCounts,
+      custom_schema: schema.rows,
+      first_motors: motors.rows,
+      has_more: motors.rows.length >= LIMIT,
+      dashboard_stats: kpis,
+      brands: brandsQuery.rows.map(r => r.company).filter(Boolean)
+    });
+  } catch (e) {
+    console.error('[admin init-data error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Standalone Guest & Public Specification Share Handlers ──────────────────────
+app.get('/api/guest/share/:type/:name', async (req, res) => {
+  const { type, name } = req.params;
+  if (!type || !name) return res.status(400).json({ error: 'Type and name required' });
+  
+  const decodedName = decodeURIComponent(name).trim();
+  const lowerType = type.toLowerCase();
+  
+  try {
+    let queryResult;
+    if (lowerType === 'motor') {
+      let sql = `
+        SELECT m.*, c.name AS category_name
+        FROM public.motors m
+        LEFT JOIN public.categories c ON m.category_id = c.id
+        WHERE LOWER(m.motor_name) = LOWER($1) OR LOWER(m.id::text) = LOWER($1)
+      `;
+      queryResult = await pool.query(sql, [decodedName]);
+      if (!queryResult.rows.length) {
+        queryResult = await pool.query(`
+          SELECT m.*, c.name AS category_name
+          FROM public.motors m
+          LEFT JOIN public.categories c ON m.category_id = c.id
+          WHERE m.motor_name ILIKE $1
+          LIMIT 1
+        `, [`%${decodedName}%`]);
+      }
+    } else if (lowerType === 'esc') {
+      let sql = `SELECT * FROM public.escs WHERE LOWER(name) = LOWER($1) OR LOWER(id::text) = LOWER($1)`;
+      queryResult = await pool.query(sql, [decodedName]);
+      if (!queryResult.rows.length) {
+        queryResult = await pool.query(`SELECT * FROM public.escs WHERE name ILIKE $1 LIMIT 1`, [`%${decodedName}%`]);
+      }
+    } else if (lowerType === 'propeller') {
+      let sql = `SELECT * FROM public.propellers WHERE LOWER(name) = LOWER($1) OR LOWER(id::text) = LOWER($1)`;
+      queryResult = await pool.query(sql, [decodedName]);
+      if (!queryResult.rows.length) {
+        queryResult = await pool.query(`SELECT * FROM public.propellers WHERE name ILIKE $1 LIMIT 1`, [`%${decodedName}%`]);
+      }
+    }
+
+    if (!queryResult || !queryResult.rows.length) {
+      return res.status(404).json({ error: `${type} "${decodedName}" not found.` });
+    }
+
+    const item = queryResult.rows[0];
+    item.name = item.name || item.motor_name || item.motor;
+    item.motor_name = item.motor_name || item.name;
+    item.motor = item.motor || item.motor_name || item.name;
+    item.brand = item.brand || item.company;
+    item.company = item.company || item.brand;
+    item.main_image = item.main_image || item.mainImage;
+    item.mainImage = item.mainImage || item.main_image;
+    item.gallery_images = item.gallery_images || item.galleryImages;
+    item.galleryImages = item.galleryImages || item.gallery_images;
+
+    if (item.custom_parameters && typeof item.custom_parameters === 'string') {
+      try { item.custom_parameters = JSON.parse(item.custom_parameters); } catch (e) {}
+    }
+    if (item.gallery_images && typeof item.gallery_images === 'string') {
+      try { item.gallery_images = JSON.parse(item.gallery_images); } catch (e) {}
+    }
+
+    res.json(item);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/public/find-item/:name', async (req, res) => {
+  const { name } = req.params;
+  if (!name) return res.status(400).json({ error: 'Missing name parameter' });
+  const decodedName = decodeURIComponent(name).trim();
+  
+  try {
+    let motorRes = await pool.query(`SELECT id, motor_name AS name FROM public.motors WHERE LOWER(motor_name) = LOWER($1) LIMIT 1`, [decodedName]);
+    if (!motorRes.rows.length) {
+      motorRes = await pool.query(`SELECT id, motor_name AS name FROM public.motors WHERE motor_name ILIKE $1 LIMIT 1`, [`%${decodedName}%`]);
+    }
+    if (motorRes.rows.length) return res.json({ type: 'motor', id: motorRes.rows[0].id, name: motorRes.rows[0].name });
+
+    let escRes = await pool.query(`SELECT id, name FROM public.escs WHERE LOWER(name) = LOWER($1) LIMIT 1`, [decodedName]);
+    if (!escRes.rows.length) {
+      escRes = await pool.query(`SELECT id, name FROM public.escs WHERE name ILIKE $1 LIMIT 1`, [`%${decodedName}%`]);
+    }
+    if (escRes.rows.length) return res.json({ type: 'esc', id: escRes.rows[0].id, name: escRes.rows[0].name });
+
+    let propRes = await pool.query(`SELECT id, name FROM public.propellers WHERE LOWER(name) = LOWER($1) LIMIT 1`, [decodedName]);
+    if (!propRes.rows.length) {
+      propRes = await pool.query(`SELECT id, name FROM public.propellers WHERE name ILIKE $1 LIMIT 1`, [`%${decodedName}%`]);
+    }
+    if (propRes.rows.length) return res.json({ type: 'propeller', id: propRes.rows[0].id, name: propRes.rows[0].name });
+
+    return res.status(404).json({ error: 'Item not found' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
 // Generic Table proxy endpoints (enforces tableMap routing constraints)
-app.all('/api/admin/:table', async (req, res) => {
+app.all(['/api/admin/:table', '/api/db/:table', '/api/:table'], async (req, res) => {
   const clientTable = req.params.table;
   const dbTable = tableMap[clientTable] || clientTable.replace(/-/g, '_');
 
@@ -903,15 +1152,33 @@ app.all('/api/admin/:table', async (req, res) => {
   if (method === 'PUT') method = 'PATCH';
 
   try {
-    const payload = ['POST', 'PATCH'].includes(method) ? req.body : null;
-    const data = await queryTable(dbTable, method, payload, req.query);
-    res.json(data);
+    if (method === 'GET') {
+      const qp = { ...req.query };
+      delete qp.limit;
+      delete qp.offset;
+      delete qp.order;
+      qp.select = 'id';
+      const allMatching = await queryTable(dbTable, 'GET', null, qp);
+      const totalCount = allMatching.length;
+
+      const data = await queryTable(dbTable, 'GET', null, req.query);
+      res.setHeader('X-Total-Count', totalCount);
+      res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+      res.json(data);
+    } else {
+      const payload = ['POST', 'PATCH'].includes(method) ? req.body : null;
+      const data = await queryTable(dbTable, method, payload, req.query);
+      if (dbTable === 'motors' && ['POST', 'PATCH', 'DELETE'].includes(method)) {
+        cachedDashboardStats = null;
+      }
+      res.json(data);
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.all('/api/admin/:table/:id', async (req, res) => {
+app.all(['/api/admin/:table/:id', '/api/db/:table/:id', '/api/:table/:id'], async (req, res) => {
   const clientTable = req.params.table;
   const dbTable = tableMap[clientTable] || clientTable.replace(/-/g, '_');
   req.query.id = `eq.${req.params.id}`;
@@ -922,6 +1189,9 @@ app.all('/api/admin/:table/:id', async (req, res) => {
   try {
     const payload = ['POST', 'PATCH'].includes(method) ? req.body : null;
     const data = await queryTable(dbTable, method, payload, req.query);
+    if (dbTable === 'motors' && ['POST', 'PATCH', 'DELETE'].includes(method)) {
+      cachedDashboardStats = null;
+    }
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });

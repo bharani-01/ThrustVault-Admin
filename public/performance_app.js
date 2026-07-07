@@ -151,6 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
         formTestPropeller: document.getElementById('form-test-propeller'),
         formTestEsc: document.getElementById('form-test-esc'),
         formTestBattery: document.getElementById('form-test-battery'),
+        formTestAmbient: document.getElementById('form-test-ambient'),
         formTestTester: document.getElementById('form-test-tester'),
         btnDownloadRunsTemplate: document.getElementById('btn-download-runs-template'),
         btnImportFile: document.getElementById('btn-import-file'),
@@ -783,6 +784,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (lower.includes('propeller') || lower.includes('prop')) return 'meta_propeller_model';
             if (lower.includes('esc')) return 'meta_esc_model';
             if (lower.includes('battery')) return 'meta_battery_info';
+            if (lower.includes('ambient')) return 'meta_ambient_temperature';
             if (lower.includes('tester') || lower.includes('conducted by')) return 'meta_test_conducted_by';
 
             return 'ignore';
@@ -814,6 +816,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <option value="meta_propeller_model" ${defaultVal === 'meta_propeller_model' ? 'selected' : ''}>Propeller Model Name</option>
                     <option value="meta_esc_model" ${defaultVal === 'meta_esc_model' ? 'selected' : ''}>ESC Model</option>
                     <option value="meta_battery_info" ${defaultVal === 'meta_battery_info' ? 'selected' : ''}>Battery Spec</option>
+                    <option value="meta_ambient_temperature" ${defaultVal === 'meta_ambient_temperature' ? 'selected' : ''}>Ambient Temperature</option>
                     <option value="meta_test_conducted_by" ${defaultVal === 'meta_test_conducted_by' ? 'selected' : ''}>Tester Name</option>
                     <option value="custom">Custom Column...</option>
                 </select>
@@ -982,6 +985,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const propeller = metaValues.propeller_model || metaValues.propeller || runItem.propellerModel;
                 const esc = metaValues.esc_model || metaValues.esc || '';
                 const battery = metaValues.battery_info || metaValues.battery || '';
+                const ambientTemperature = metaValues.ambient_temperature_c || metaValues.ambient_temperature || null;
                 const motorName = metaValues.motor_model || runItem.motorModel;
                 const voltage = runItem.voltage;
 
@@ -1052,6 +1056,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         metadata: {
                             esc_model: esc,
                             battery_info: battery,
+                            ambient_temperature_c: ambientTemperature,
                             test_conducted_by: tester
                         },
                         rows: parsedRows,
@@ -1222,6 +1227,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.formTestPropeller.value = run.propellerModel || '';
         elements.formTestEsc.value = run.metadata.esc_model || '';
         elements.formTestBattery.value = run.metadata.battery_info || '';
+        if (elements.formTestAmbient) elements.formTestAmbient.value = run.metadata.ambient_temperature_c || run.metadata.ambient_temperature || '';
         elements.formTestTester.value = run.metadata.test_conducted_by || '';
 
         if (run.matchedMotorId) {
@@ -1352,7 +1358,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                 propeller_model: run.propellerModel,
                                 esc_model: run.metadata.esc_model || null,
                                 battery_info: run.metadata.battery_info || null,
+                                ambient_temperature_c: run.metadata.ambient_temperature_c || null,
                                 test_conducted_by: run.metadata.test_conducted_by || null,
+                                extra_columns: run.extraColumns || [],
                                 data_points: run.rows.map(pt => ({
                                     throttle: pt.throttle,
                                     voltage: pt.voltage,
@@ -1384,6 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 propeller_model: propellerModel,
                                 esc_model: run.metadata.esc_model || null,
                                 battery_info: run.metadata.battery_info || null,
+                                ambient_temperature_c: run.metadata.ambient_temperature_c || null,
                                 test_conducted_by: run.metadata.test_conducted_by || null
                             })
                         });
@@ -1683,6 +1692,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const esc = elements.formTestEsc.value.trim() || null;
         const battery = elements.formTestBattery.value.trim() || null;
+        const ambientTemperature = elements.formTestAmbient ? (elements.formTestAmbient.value.trim() || null) : null;
         const tester = elements.formTestTester.value.trim() || null;
 
         const rowEls = Array.from(elements.creatorTableRows.querySelectorAll('tr'));
@@ -1816,7 +1826,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             propeller_model: propeller,
                             esc_model: esc,
                             battery_info: battery,
+                            ambient_temperature_c: ambientTemperature,
                             test_conducted_by: tester,
+                            extra_columns: state.extraColumns || [],
                             data_points: stepsData
                         })
                     });
@@ -1831,7 +1843,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             propeller_model: propeller,
                             esc_model: esc,
                             battery_info: battery,
+                            ambient_temperature_c: ambientTemperature,
                             test_conducted_by: tester,
+                            extra_columns: state.extraColumns || [],
                             data_points: stepsData
                         })
                     });
@@ -1858,6 +1872,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             propeller_model: propeller,
                             esc_model: esc,
                             battery_info: battery,
+                            ambient_temperature_c: ambientTemperature,
                             test_conducted_by: tester
                         })
                     });
@@ -1892,6 +1907,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             propeller_model: propeller,
                             esc_model: esc,
                             battery_info: battery,
+                            ambient_temperature_c: ambientTemperature,
                             test_conducted_by: tester
                         })
                     });
@@ -2255,6 +2271,7 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.formTestPropeller.value = draft.propeller_model || '';
         elements.formTestEsc.value = draft.esc_model || '';
         elements.formTestBattery.value = draft.battery_info || '';
+        if (elements.formTestAmbient) elements.formTestAmbient.value = draft.ambient_temperature_c || draft.ambient_temperature || '';
         elements.formTestTester.value = draft.test_conducted_by || '';
 
         // Load data points
