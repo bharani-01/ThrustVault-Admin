@@ -34,7 +34,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: false,
     httpOnly: true,
     maxAge: 86400000, // 24 hours
     sameSite: 'lax',
@@ -116,7 +116,7 @@ const ADMIN_FRONTEND_DIST = path.join(__dirname, 'frontend', 'dist');
 if (require('fs').existsSync(ADMIN_FRONTEND_DIST)) {
   app.use(express.static(ADMIN_FRONTEND_DIST));
   app.use('/admin', express.static(ADMIN_FRONTEND_DIST));
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(express.static(path.join(__dirname, 'public')));
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
     res.sendFile(path.join(ADMIN_FRONTEND_DIST, 'index.html'));
@@ -912,6 +912,11 @@ app.get('/api/admin/users', async (req, res) => {
 
 let cachedDashboardStats = null;
 
+// Call this whenever motors are inserted/updated/deleted to bust the cache
+function bustStatsCache() {
+  cachedDashboardStats = null;
+}
+
 async function getOrCalculateStats() {
   if (cachedDashboardStats) return cachedDashboardStats;
   try {
@@ -919,15 +924,20 @@ async function getOrCalculateStats() {
     const allMotors = res.rows;
     const totalMotors = allMotors.length;
 
+    // Handles: "1.202", "1.202kg", "1202g", "1202.0g", pure number
     function parseThrustToKg(thrustStr) {
-      if (!thrustStr) return 0;
+      if (!thrustStr || String(thrustStr).trim().toLowerCase() === 'n/a') return 0;
       const normalized = String(thrustStr).trim().toLowerCase().replace(/\s+/g, '');
-      const match = normalized.match(/^([0-9.]+)(kg|g)?$/);
-      if (match) {
-        const val = parseFloat(match[1]);
-        const unit = match[2] || 'kg';
-        return unit === 'g' ? val / 1000 : val;
+      // Plain number (already in kg, as seeded)
+      const pureNum = normalized.match(/^([0-9.]+)$/);
+      if (pureNum) return parseFloat(pureNum[1]);
+      // Number with unit suffix
+      const withUnit = normalized.match(/^([0-9.]+)(kg|g)$/);
+      if (withUnit) {
+        const val = parseFloat(withUnit[1]);
+        return withUnit[2] === 'g' ? val / 1000 : val;
       }
+      // Fallback: grab first number
       const numbers = normalized.match(/[0-9.]+/);
       if (numbers) {
         const val = parseFloat(numbers[0]);
@@ -954,12 +964,13 @@ async function getOrCalculateStats() {
     if (minThrust !== Infinity && maxThrust !== -Infinity) {
       minThrustVal = minThrust;
       maxThrustVal = maxThrust;
-      thrustRangeStr = minThrust === maxThrust 
-        ? `${minThrust.toFixed(2)} kg` 
+      thrustRangeStr = minThrust === maxThrust
+        ? `${minThrust.toFixed(2)} kg`
         : `${minThrust.toFixed(2)} – ${maxThrust.toFixed(2)} kg`;
       maxThrustStr = `${maxThrust.toFixed(2)} kg`;
     }
 
+    // Extract all S-cell ratings from ESC names, motor names, and custom_parameters
     let sRatings = [];
     allMotors.forEach(m => {
       const customParams = m.custom_parameters || {};
@@ -968,14 +979,14 @@ async function getOrCalculateStats() {
         : '';
       const esc = m.recommended_esc || '';
       const name = m.motor_name || '';
-      
-      const match = v.match(/(\d+)s/i) || esc.match(/(\d+)s/i) || name.match(/(\d+)s/i);
-      if (match) {
-        const val = parseInt(match[1], 10);
-        if (val >= 1 && val <= 24) {
-          sRatings.push(val);
-        }
-      }
+
+      // Find ALL S-rating occurrences in each field (e.g. "6S", "12S", "24S")
+      const allSources = `${v} ${esc} ${name}`;
+      const matches = allSources.match(/(\d{1,2})s/gi) || [];
+      matches.forEach(match => {
+        const val = parseInt(match, 10);
+        if (val >= 1 && val <= 24) sRatings.push(val);
+      });
     });
 
     let voltageRangeStr = 'N/A';
@@ -1019,7 +1030,9 @@ app.get('/api/init-data', async (req, res) => {
                          recommended_esc, recommended_propeller,
                          link_motor, link_esc, link_propeller, custom_parameters, uploaded_by,
                          main_image, gallery_images
-                  FROM public.motors ORDER BY max_thrust ASC LIMIT $1`, [LIMIT]),
+                  FROM public.motors
+                  ORDER BY CASE WHEN max_thrust ~ '^[0-9]+(\\.[0-9]+)?$' THEN max_thrust::numeric ELSE 0 END ASC
+                  LIMIT $1`, [LIMIT]),
       getOrCalculateStats(),
       pool.query("SELECT DISTINCT company FROM public.motors WHERE company IS NOT NULL AND company != '' ORDER BY company")
     ]);
